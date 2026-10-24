@@ -781,6 +781,40 @@ func (e ResponsesEventEmitter) InputDone(itemID string, outputIndex int, input s
 	})
 }
 
+// ReasoningSummaryPartAdded announces the summary_text part of a reasoning
+// output item before its first summary delta.
+func (e ResponsesEventEmitter) ReasoningSummaryPartAdded(itemID string, outputIndex int) []byte {
+	return SSEEvent("response.reasoning_summary_part.added", map[string]any{
+		"type": "response.reasoning_summary_part.added", "item_id": itemID, "output_index": outputIndex, "summary_index": 0,
+		"part": map[string]any{"type": "summary_text", "text": ""},
+	})
+}
+
+// ReasoningSummaryTextDelta streams one partial reasoning summary delta
+// referencing the announced reasoning item by item_id and output_index.
+func (e ResponsesEventEmitter) ReasoningSummaryTextDelta(itemID string, outputIndex int, delta string) []byte {
+	return SSEEvent("response.reasoning_summary_text.delta", map[string]any{
+		"type": "response.reasoning_summary_text.delta", "item_id": itemID, "output_index": outputIndex, "summary_index": 0, "delta": delta,
+	})
+}
+
+// ReasoningSummaryTextDone renders the reasoning_summary_text completion for
+// the announced reasoning item, emitted before response.completed.
+func (e ResponsesEventEmitter) ReasoningSummaryTextDone(itemID string, outputIndex int, text string) []byte {
+	return SSEEvent("response.reasoning_summary_text.done", map[string]any{
+		"type": "response.reasoning_summary_text.done", "item_id": itemID, "output_index": outputIndex, "summary_index": 0, "text": text,
+	})
+}
+
+// ReasoningSummaryPartDone renders the reasoning_summary_part completion for
+// the announced reasoning item, emitted before response.completed.
+func (e ResponsesEventEmitter) ReasoningSummaryPartDone(itemID string, outputIndex int, text string) []byte {
+	return SSEEvent("response.reasoning_summary_part.done", map[string]any{
+		"type": "response.reasoning_summary_part.done", "item_id": itemID, "output_index": outputIndex, "summary_index": 0,
+		"part": map[string]any{"type": "summary_text", "text": text},
+	})
+}
+
 // CustomInputTail derives the newly-available custom tool input from the
 // accumulated wrapped arguments: nothing is reportable until the
 // accumulation unwraps past its JSON envelope, at which point only the
@@ -1151,6 +1185,12 @@ func (r *ResponsesRequest) DecodeInputItems() ([]RespItem, *errclass.Error) {
 	return items, nil
 }
 
+// RespSummaryPart is one summary text entry of a Responses reasoning item.
+type RespSummaryPart struct {
+	Type string `json:"type,omitempty"`
+	Text string `json:"text"`
+}
+
 // RespItem is one Responses input/output item (message, function_call,
 // or function_call_output). ID carries the item identity of synthesized
 // terminal message items (FR-006 sibling parity: the Chat Completions
@@ -1158,20 +1198,18 @@ func (r *ResponsesRequest) DecodeInputItems() ([]RespItem, *errclass.Error) {
 // response.output_item.added announcement used); function_call items stay
 // call_id-only per the documented canonical shape.
 type RespItem struct {
-	Type      string          `json:"type"`
-	ID        string          `json:"id,omitempty"`
-	Role      string          `json:"role,omitempty"`
-	Content   json.RawMessage `json:"content,omitempty"`
-	CallID    string          `json:"call_id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Namespace string          `json:"namespace,omitempty"`
-	Arguments string          `json:"arguments,omitempty"`
-	Input     string          `json:"input,omitempty"`
-	Output    json.RawMessage `json:"output,omitempty"`
-	Summary   []struct {
-		Text string `json:"text"`
-	} `json:"summary,omitempty"`
-	Tools     []RespTool      `json:"tools,omitempty"`
+	Type      string            `json:"type"`
+	ID        string            `json:"id,omitempty"`
+	Role      string            `json:"role,omitempty"`
+	Content   json.RawMessage   `json:"content,omitempty"`
+	CallID    string            `json:"call_id,omitempty"`
+	Name      string            `json:"name,omitempty"`
+	Namespace string            `json:"namespace,omitempty"`
+	Arguments string            `json:"arguments,omitempty"`
+	Input     string            `json:"input,omitempty"`
+	Output    json.RawMessage   `json:"output,omitempty"`
+	Summary   []RespSummaryPart `json:"summary,omitempty"`
+	Tools     []RespTool        `json:"tools,omitempty"`
 }
 
 // CCFunction is one Chat Completions tool function definition (decode and
@@ -1624,21 +1662,49 @@ type outputTextPart struct {
 // only when text is non-empty). Render materializes the array once, at
 // terminal time.
 type OutputAssembler struct {
-	messageID string          // identity carried by the message item
-	items     []any           // rendered items in insertion order
-	textSlot  int             // reserved message position, -1 until reserved
-	text      strings.Builder // aggregated message text
-	tools     *ResponseTools  // wire-to-original tool identities for restoration
+	messageID     string          // identity carried by the message item
+	items         []any           // rendered items in insertion order
+	reasoningSlot int             // reserved reasoning position, -1 until reserved
+	reasoning     strings.Builder // aggregated reasoning summary text
+	textSlot      int             // reserved message position, -1 until reserved
+	text          strings.Builder // aggregated message text
+	tools         *ResponseTools  // wire-to-original tool identities for restoration
 }
 
 // NewOutputAssembler binds an assembler to the response identity the
 // synthesized message item carries.
 func NewOutputAssembler(messageID string, tools ...*ResponseTools) *OutputAssembler {
-	a := &OutputAssembler{messageID: messageID, textSlot: -1, items: make([]any, 0)}
+	a := &OutputAssembler{messageID: messageID, reasoningSlot: -1, textSlot: -1, items: make([]any, 0)}
 	if len(tools) > 0 && tools[0] != nil {
 		a.tools = tools[0]
 	}
 	return a
+}
+
+// ReasoningID returns the canonical reasoning item ID derived from messageID.
+func (a *OutputAssembler) ReasoningID() string {
+	if a.messageID == "" {
+		return "rs_0"
+	}
+	if strings.HasPrefix(a.messageID, "rs_") {
+		return a.messageID
+	}
+	return "rs_" + a.messageID
+}
+
+// ReserveReasoningSlot pins the reasoning item's position at the current end
+// of the output array so later items cannot displace it; idempotent.
+func (a *OutputAssembler) ReserveReasoningSlot() {
+	if a.reasoningSlot >= 0 {
+		return
+	}
+	a.reasoningSlot = len(a.items)
+	a.items = append(a.items, nil)
+}
+
+// AddReasoning appends one reasoning fragment to the aggregated reasoning summary.
+func (a *OutputAssembler) AddReasoning(fragment string) {
+	a.reasoning.WriteString(fragment)
 }
 
 // ReserveTextSlot pins the message item's position at the current end of
@@ -1688,6 +1754,22 @@ func (a *OutputAssembler) Render() []any {
 			rest := a.items
 			a.items = make([]any, 0, len(rest)+1)
 			a.items = append(a.items, msg)
+			a.items = append(a.items, rest...)
+		}
+	}
+	r := a.reasoning.String()
+	if r != "" || a.reasoningSlot >= 0 {
+		rItem := RespItem{
+			Type:    "reasoning",
+			ID:      a.ReasoningID(),
+			Summary: []RespSummaryPart{{Type: "summary_text", Text: r}},
+		}
+		if a.reasoningSlot >= 0 {
+			a.items[a.reasoningSlot] = rItem
+		} else {
+			rest := a.items
+			a.items = make([]any, 0, len(rest)+1)
+			a.items = append(a.items, rItem)
 			a.items = append(a.items, rest...)
 		}
 	}

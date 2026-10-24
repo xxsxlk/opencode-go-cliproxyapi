@@ -1274,3 +1274,92 @@ func TestStreamResponsesNamespaceRestored(t *testing.T) {
 		t.Fatalf("terminal identity not restored: %v", fc)
 	}
 }
+
+func TestStreamReasoningContentSynthesizedForClaudeAndResponses(t *testing.T) {
+	t.Run("claude thinking block precedes text block", func(t *testing.T) {
+		sc := NewStreamConverter("claude")
+		evs := feedAll(t, sc,
+			`data: {"id":"c1","model":"glm-5.3-flash","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"step 1"}}]}`,
+			`data: {"choices":[{"index":0,"delta":{"reasoning_content":" -> step 2"}}]}`,
+			`data: {"choices":[{"index":0,"delta":{"content":"answer"}}]}`,
+			`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`)
+
+		var names []string
+		for _, e := range evs {
+			names = append(names, e.Name)
+		}
+		want := []string{
+			"message_start",
+			"content_block_start",
+			"content_block_delta",
+			"content_block_delta",
+			"content_block_stop",
+			"content_block_start",
+			"content_block_delta",
+			"content_block_stop",
+			"message_delta",
+			"message_stop",
+		}
+		if len(names) != len(want) {
+			t.Fatalf("event names = %v, want %v", names, want)
+		}
+		for i := range want {
+			if names[i] != want[i] {
+				t.Fatalf("event[%d] = %q, want %q (all: %v)", i, names[i], want[i], names)
+			}
+		}
+		if cb := evs[1].Data["content_block"].(map[string]any); cb["type"] != "thinking" {
+			t.Fatalf("expected thinking block start, got %v", cb)
+		}
+		if d := evs[2].Data["delta"].(map[string]any); d["type"] != "thinking_delta" || d["thinking"] != "step 1" {
+			t.Fatalf("expected thinking_delta step 1, got %v", d)
+		}
+		if cb := evs[5].Data["content_block"].(map[string]any); cb["type"] != "text" || evs[5].Data["index"] != float64(1) {
+			t.Fatalf("expected text block start at index 1, got %v", evs[5].Data)
+		}
+	})
+
+	t.Run("openai-response reasoning item and summary deltas emitted", func(t *testing.T) {
+		sc := NewStreamConverter("openai-response")
+		evs := feedAll(t, sc,
+			`data: {"id":"r1","model":"glm-5.3-flash","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"think A"}}]}`,
+			`data: {"choices":[{"index":0,"delta":{"reasoning_content":" + B"}}]}`,
+			`data: {"choices":[{"index":0,"delta":{"content":"final"}}]}`,
+			`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":6,"completion_tokens_details":{"reasoning_tokens":3}}}`,
+			`data: [DONE]`)
+
+		var deltaTexts []string
+		var completed map[string]any
+		for _, e := range evs {
+			if e.Name == "response.reasoning_summary_text.delta" {
+				deltaTexts = append(deltaTexts, e.Data["delta"].(string))
+			}
+			if e.Name == "response.completed" {
+				completed = e.Data["response"].(map[string]any)
+			}
+		}
+		if strings.Join(deltaTexts, "") != "think A + B" {
+			t.Fatalf("reasoning summary deltas = %q, want %q", strings.Join(deltaTexts, ""), "think A + B")
+		}
+		if completed == nil {
+			t.Fatal("missing response.completed")
+		}
+		output := completed["output"].([]any)
+		if len(output) != 2 {
+			t.Fatalf("output len = %d, want 2: %v", len(output), output)
+		}
+		rItem := output[0].(map[string]any)
+		if rItem["type"] != "reasoning" || rItem["id"] != "rs_r1" {
+			t.Fatalf("reasoning item = %v", rItem)
+		}
+		summary := rItem["summary"].([]any)
+		if len(summary) != 1 || summary[0].(map[string]any)["text"] != "think A + B" {
+			t.Fatalf("reasoning summary = %v", summary)
+		}
+		mItem := output[1].(map[string]any)
+		if mItem["type"] != "message" || mItem["id"] != "r1" {
+			t.Fatalf("message item = %v", mItem)
+		}
+	})
+}

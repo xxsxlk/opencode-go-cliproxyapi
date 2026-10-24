@@ -29,6 +29,7 @@ This plugin exposes OpenCode Go as a single provider (`opencode-go`) backed by a
   - Anthropic Messages (`/v1/messages`)
   - OpenAI Responses (`/v1/responses`)
 - **Thinking & Reasoning Support**: Maps reasoning effort across supported client and upstream formats.
+- **Long-thinking streams**: Decouples stream header wait from upstream inactivity; reasoning/ping traffic renews idle time while downstream heartbeats keep clients connected even when reasoning is omitted by protocol conversion.
 - **Dynamic Catalog Discovery**: Fetches remote model catalogs with local fallback and custom route overrides.
 - **Multi-Key Auth Scheduling**: Pools multiple API keys with CLIProxyAPI's native scheduler for rotation, retries, and error cooldowns across all protocols.
 - **Native quotas**: Rolling, weekly, and monthly quotas use CLIProxyAPI's generic quota endpoints and the selected credential. The separate plugin page is removed.
@@ -104,8 +105,13 @@ plugins:
           endpoint: "/v1/messages"       # must start with /
 
       # Execution settings
-      request-timeout: "5m"              # upstream request timeout (default: "5m")
-      max-response-bytes: 67108864       # max non-streaming response body size in bytes (default: 64 MiB)
+      request-timeout: "5m"              # non-streaming request timeout (default: "5m")
+      streaming:
+        header-timeout: "15m"            # max wait for upstream response headers
+        idle-timeout: "15m"              # max silence from upstream (reasoning and pings count)
+        max-duration: "0s"               # 0 disables total stream lifetime cap
+        keepalive-interval: "15s"        # downstream heartbeat; 0 disables it
+      max-response-bytes: 67108864       # max body bytes (cumulative for streams; default: 64 MiB)
       allow-http: false                  # allow http:// scheme for local mock/testing (default: false)
 ```
 
@@ -124,9 +130,37 @@ plugins:
 | `protocols.messages` | `bool` | `true` | Protocol switch for Messages endpoints. |
 | `protocols.responses` | `bool` | `true` | Protocol switch for Responses endpoints. |
 | `route-overrides` | `map` | `{}` | Map of model ID to `{ protocol: "...", endpoint: "..." }` overriding built-in family routing. Valid protocols: `chat-completions`, `messages`, `responses`. |
-| `request-timeout` | `duration` | `5m` | Upstream HTTP request timeout. Must be positive. |
-| `max-response-bytes` | `int64` | `67108864` (64 MiB) | Maximum non-streaming response body size in bytes. |
+| `request-timeout` | `duration` | `5m` | Non-streaming HTTP request timeout; also bounds reading an upstream error body after failed stream open. Must be positive. |
+| `streaming.header-timeout` | `duration` | `15m` | Deadline for upstream stream response headers. Must be positive. |
+| `streaming.idle-timeout` | `duration` | `15m` | Max gap between upstream bytes after headers, including reasoning and ping bytes. Must be positive. |
+| `streaming.max-duration` | `duration` | `0s` | Optional absolute stream lifetime cap; `0s` disables it. |
+| `streaming.keepalive-interval` | `duration` | `15s` | Downstream keepalive cadence. `0s` disables heartbeats and pre-header SSE bootstrap. |
+| `max-response-bytes` | `int64` | `67108864` (64 MiB) | Maximum non-streaming response body or cumulative upstream stream bytes. |
 | `allow-http` | `bool` | `false` | When `true`, permits `http://` scheme in `base-url` / `catalog-url` for local testing. |
+
+### Long thinking and stream lifetime
+
+Streamed requests (including `glm-5.3-flash`) no longer have the fixed 5-minute
+`request-timeout` limit. The stream header wait and upstream inactivity limits
+are independent; every nonempty upstream chunk, including reasoning and SSE
+pings, renews the inactivity deadline. Downstream keepalives are emitted even
+when protocol conversion suppresses reasoning text. `max-duration: "0s"`
+means there is no plugin-imposed total lifetime cap. `max-response-bytes` still
+limits cumulative upstream traffic, so raise it separately for very large streams.
+
+The plugin emits a protocol-valid heartbeat before the first upstream response
+header **only after** `keepalive-interval` elapses. Fast upstream failures are
+still returned as retryable pre-stream errors. Once the first heartbeat has
+committed the client SSE response, later failures are reported *inside the
+stream* and cannot be retried transparently. OpenAI Chat clients receive a
+no-content JSON chunk; Claude clients receive an SSE comment; Responses clients
+receive `event: ping` with JSON `data: {}` (clients must ignore unknown events).
+Setting `streaming.keepalive-interval: "0s"` disables this bootstrap and the
+periodic heartbeats, restoring pre-header waiting behavior.
+
+The plugin cannot override upstream infrastructure, reverse-proxy, or client
+idle/total timeouts. Ensure those limits exceed the configured heartbeat
+interval, and use a client that consumes streaming events continuously.
 
 ## Testing
 

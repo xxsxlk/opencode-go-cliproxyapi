@@ -38,7 +38,7 @@ func AuthHeaders(key string) http.Header {
 func BuildRequest(upstreamModel, sourceFormat string, sourceBody []byte, ts *pluginapi.ThinkingSupport, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
 	switch sourceFormat {
 	case "openai":
-		return buildOpenAIRequest(upstreamModel, sourceBody)
+		return buildOpenAIRequest(upstreamModel, sourceBody, ts)
 	case "claude":
 		return claudeToChat(upstreamModel, sourceBody, ts)
 	case "openai-response":
@@ -50,9 +50,11 @@ func BuildRequest(upstreamModel, sourceFormat string, sourceBody []byte, ts *plu
 
 // buildOpenAIRequest rewrites the top-level model field of an OpenAI request
 // body to upstreamModel, normalizes role:"developer" messages to role:"system",
-// and strips any malformed top-level thinking object. DeepSeek models fail if
-// thinking lacks a valid string type field or if messages contain role:"developer".
-func buildOpenAIRequest(upstreamModel string, body []byte) ([]byte, *errclass.Error) {
+// clamps canonical reasoning_effort values to the target model's supported
+// levels, and strips any malformed top-level thinking object. DeepSeek models
+// fail if thinking lacks a valid string type field or if messages contain
+// role:"developer".
+func buildOpenAIRequest(upstreamModel string, body []byte, ts *pluginapi.ThinkingSupport) ([]byte, *errclass.Error) {
 	var req map[string]json.RawMessage
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, errclass.Translation("malformed openai request JSON: " + err.Error())
@@ -64,6 +66,19 @@ func buildOpenAIRequest(upstreamModel string, body []byte) ([]byte, *errclass.Er
 	validThinking := hasThinking && isValidThinking(rawThinking)
 	if hasThinking && !validThinking {
 		delete(req, "thinking")
+	}
+
+	var effortModified bool
+	if rawEffort, ok := req["reasoning_effort"]; ok {
+		var effortStr string
+		if err := json.Unmarshal(rawEffort, &effortStr); err == nil && effortStr != "" {
+			if clamped := thinking.ClampEffort(effortStr, ts); clamped != effortStr {
+				if b, err := json.Marshal(clamped); err == nil {
+					req["reasoning_effort"] = b
+					effortModified = true
+				}
+			}
+		}
 	}
 
 	var msgsModified bool
@@ -84,7 +99,7 @@ func buildOpenAIRequest(upstreamModel string, body []byte) ([]byte, *errclass.Er
 			}
 		}
 	}
-	if raw, ok := req["model"]; ok && string(raw) == `"`+upstreamModel+`"` && (validThinking || !hasThinking) && !msgsModified {
+	if raw, ok := req["model"]; ok && string(raw) == `"`+upstreamModel+`"` && (validThinking || !hasThinking) && !msgsModified && !effortModified {
 		return body, nil
 	}
 	req["model"] = json.RawMessage(`"` + upstreamModel + `"`)
@@ -357,7 +372,7 @@ func responsesToChat(upstreamModel string, body []byte, ts *pluginapi.ThinkingSu
 		out.MaxTokens = src.MaxOutputTokens
 	}
 	if src.Reasoning != nil && src.Reasoning.Effort != "" {
-		out.ReasoningEffort = strings.ToLower(strings.TrimSpace(src.Reasoning.Effort))
+		out.ReasoningEffort = thinking.ClampEffort(src.Reasoning.Effort, ts)
 	}
 	addSystem := func(text string) {
 		if text != "" {

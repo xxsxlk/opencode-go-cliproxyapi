@@ -214,3 +214,27 @@ func SupportedLevels(ts *pluginapi.ThinkingSupport) []string {
 func defaultLevels() []string {
 	return []string{"low", "medium", "high"}
 }
+
+// ClampEffort normalizes a client-declared reasoning effort and clamps
+// canonical levels to the target model's supported set so out-of-range
+// canonical efforts (such as OpenCode's "max" variant on models that only
+// support {"low","medium","high"}) map to the nearest supported effort
+// instead of risking an upstream HTTP 400 rejection. When ts is nil or
+// carries no explicit Levels, only "max" is clamped to defaultLevels
+// while other levels (e.g. "xhigh") pass through normalized.
+func ClampEffort(effort string, ts *pluginapi.ThinkingSupport) string {
+	norm := strings.ToLower(strings.TrimSpace(effort))
+	if norm == "" {
+		return ""
+	}
+	if ts != nil && len(ts.Levels) > 0 && slices.Contains(CanonicalLevels, norm) {
+		if norm == "none" && ts.ZeroAllowed {
+			return "none"
+		}
+		return clampToSupported(norm, SupportedLevels(ts))
+	}
+	if norm == "max" {
+		return clampToSupported(norm, SupportedLevels(ts))
+	}
+	return norm
+}

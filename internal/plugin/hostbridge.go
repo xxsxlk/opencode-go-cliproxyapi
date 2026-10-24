@@ -356,7 +356,7 @@ func (b *HostBridge) closeLateStream(raw []byte) {
 	if json.Unmarshal(env.Result, &out) != nil || out.StreamID == "" {
 		return
 	}
-	_ = b.StreamClose(out.StreamID)
+	_ = b.CloseStreamBounded(out.StreamID)
 }
 
 // StreamRead reads one chunk from an UPSTREAM stream opened by DoStream.
@@ -378,11 +378,36 @@ func (b *HostBridge) StreamRead(upstreamStreamID string) (payload []byte, errMsg
 	return out.Payload, out.Error, out.Done, nil
 }
 
+// StreamReadContext allows a pending read to return when its stream lifetime
+// expires; closing the upstream stream separately releases the host's HTTP read.
+func (b *HostBridge) StreamReadContext(ctx context.Context, upstreamStreamID string) (payload []byte, errMsg string, done bool, err error) {
+	env, err := b.invoke(ctx, pluginabi.MethodHostHTTPStreamRead,
+		hostStreamIDReq{StreamID: upstreamStreamID}, "host http stream_read")
+	if err != nil {
+		return nil, "", false, err
+	}
+	var out hostStreamReadResp
+	if len(env.Result) > 0 && json.Unmarshal(env.Result, &out) != nil {
+		return nil, "", false, fmt.Errorf("host http stream_read failed: undecodable response body")
+	}
+	return out.Payload, out.Error, out.Done, nil
+}
+
 // StreamClose closes an UPSTREAM stream opened by DoStream; the result
 // content is ignored. Like StreamRead: no deadline, but joins inFlight
 // accounting so shutdown drains a close parked inside the host.
 func (b *HostBridge) StreamClose(upstreamStreamID string) error {
 	_, err := b.invoke(context.Background(), pluginabi.MethodHostHTTPStreamClose,
+		hostStreamIDReq{StreamID: upstreamStreamID}, "host http stream_close")
+	return err
+}
+
+// CloseStreamBounded releases a stream without letting a stuck host callback
+// indefinitely block cancellation or a plugin shutdown.
+func (b *HostBridge) CloseStreamBounded(upstreamStreamID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), emitTimeout)
+	defer cancel()
+	_, err := b.invoke(ctx, pluginabi.MethodHostHTTPStreamClose,
 		hostStreamIDReq{StreamID: upstreamStreamID}, "host http stream_close")
 	return err
 }

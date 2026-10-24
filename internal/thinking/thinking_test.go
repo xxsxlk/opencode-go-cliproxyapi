@@ -351,3 +351,29 @@ func TestClampToSupportedNearestMatch(t *testing.T) {
 		t.Fatalf("tie = %q, want weaker low", got)
 	}
 }
+
+func TestClampEffort(t *testing.T) {
+	glmLevels := &pluginapi.ThinkingSupport{Levels: []string{"low", "medium", "high"}}
+	cases := []struct {
+		name   string
+		effort string
+		ts     *pluginapi.ThinkingSupport
+		want   string
+	}{
+		{"empty", "   ", glmLevels, ""},
+		{"max clamps to high with explicit levels", "max", glmLevels, "high"},
+		{"MAX normalized and clamped with nil ts", " MAX ", nil, "high"},
+		{"xhigh clamps to high with explicit low/medium/high", "xhigh", glmLevels, "high"},
+		{"xhigh passes through when ts is nil", " XHigh ", nil, "xhigh"},
+		{"minimal clamps to low when ZeroAllowed is false", "minimal", glmLevels, "low"},
+		{"none preserved when ZeroAllowed is true", "none", &pluginapi.ThinkingSupport{ZeroAllowed: true, Levels: []string{"low", "high"}}, "none"},
+		{"supported level unchanged", "Medium", glmLevels, "medium"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClampEffort(tc.effort, tc.ts); got != tc.want {
+				t.Fatalf("ClampEffort(%q, %+v) = %q, want %q", tc.effort, tc.ts, got, tc.want)
+			}
+		})
+	}
+}

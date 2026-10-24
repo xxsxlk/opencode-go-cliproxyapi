@@ -15,11 +15,14 @@ import (
 
 // Defaults (spec 04 §2/§4).
 const (
-	DefaultBaseURL          = "https://opencode.ai/zen/go/v1"
-	DefaultModelPrefix      = "opencode-go"
-	DefaultRefreshInterval  = 15 * time.Minute
-	DefaultRequestTimeout   = 5 * time.Minute
-	DefaultMaxResponseBytes = int64(67108864) // 64 MiB
+	DefaultBaseURL                 = "https://opencode.ai/zen/go/v1"
+	DefaultModelPrefix             = "opencode-go"
+	DefaultRefreshInterval         = 15 * time.Minute
+	DefaultRequestTimeout          = 5 * time.Minute
+	DefaultStreamHeaderTimeout     = 15 * time.Minute
+	DefaultStreamIdleTimeout       = 15 * time.Minute
+	DefaultStreamKeepAliveInterval = 15 * time.Second
+	DefaultMaxResponseBytes        = int64(67108864) // 64 MiB
 )
 
 type ModelPrefix struct {
@@ -43,6 +46,15 @@ type Protocols struct {
 	Responses       bool
 }
 
+// Streaming separates the response-header deadline from upstream inactivity.
+// An active stream has no fixed lifetime unless MaxDuration is configured.
+type Streaming struct {
+	HeaderTimeout     time.Duration
+	IdleTimeout       time.Duration
+	MaxDuration       time.Duration
+	KeepAliveInterval time.Duration
+}
+
 type RouteOverride struct {
 	Protocol string `yaml:"protocol"`
 	Endpoint string `yaml:"endpoint"`
@@ -58,6 +70,7 @@ type Config struct {
 	RouteOverrides   map[string]RouteOverride
 	AllowHTTP        bool
 	RequestTimeout   time.Duration
+	Streaming        Streaming
 	MaxResponseBytes int64
 }
 
@@ -74,6 +87,7 @@ type rawConfig struct {
 	RouteOverrides   map[string]RouteOverride `yaml:"route-overrides"`
 	AllowHTTP        bool                     `yaml:"allow-http"`
 	RequestTimeout   *string                  `yaml:"request-timeout"`
+	Streaming        rawStreaming             `yaml:"streaming"`
 	MaxResponseBytes *int64                   `yaml:"max-response-bytes"`
 }
 
@@ -90,6 +104,13 @@ type rawKey struct {
 type rawCatalog struct {
 	RefreshInterval       *string `yaml:"refresh-interval"`
 	StaleWhileUnavailable *bool   `yaml:"stale-while-unavailable"`
+}
+
+type rawStreaming struct {
+	HeaderTimeout     *string `yaml:"header-timeout"`
+	IdleTimeout       *string `yaml:"idle-timeout"`
+	MaxDuration       *string `yaml:"max-duration"`
+	KeepAliveInterval *string `yaml:"keepalive-interval"`
 }
 
 type rawProtocols struct {
@@ -129,6 +150,25 @@ func Load(yamlBytes []byte) (Config, error) {
 	if requestTimeout <= 0 {
 		return Config{}, fmt.Errorf("request-timeout: must be positive")
 	}
+	streamHeaderTimeout, err := parseDuration("streaming.header-timeout", raw.Streaming.HeaderTimeout, DefaultStreamHeaderTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	streamIdleTimeout, err := parseDuration("streaming.idle-timeout", raw.Streaming.IdleTimeout, DefaultStreamIdleTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	streamMaxDuration, err := parseDuration("streaming.max-duration", raw.Streaming.MaxDuration, 0)
+	if err != nil {
+		return Config{}, err
+	}
+	streamKeepAlive, err := parseDuration("streaming.keepalive-interval", raw.Streaming.KeepAliveInterval, DefaultStreamKeepAliveInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	if streamHeaderTimeout <= 0 || streamIdleTimeout <= 0 || streamMaxDuration < 0 || streamKeepAlive < 0 {
+		return Config{}, fmt.Errorf("streaming: header-timeout and idle-timeout must be positive; max-duration and keepalive-interval must be nonnegative")
+	}
 	c := Config{
 		BaseURL: orDefault(raw.BaseURL, DefaultBaseURL),
 		ModelPrefix: ModelPrefix{
@@ -145,9 +185,13 @@ func Load(yamlBytes []byte) (Config, error) {
 			Messages:        orDefault(raw.Protocols.Messages, true),
 			Responses:       orDefault(raw.Protocols.Responses, true),
 		},
-		RouteOverrides:   raw.RouteOverrides,
-		AllowHTTP:        raw.AllowHTTP,
-		RequestTimeout:   requestTimeout,
+		RouteOverrides: raw.RouteOverrides,
+		AllowHTTP:      raw.AllowHTTP,
+		RequestTimeout: requestTimeout,
+		Streaming: Streaming{
+			HeaderTimeout: streamHeaderTimeout, IdleTimeout: streamIdleTimeout,
+			MaxDuration: streamMaxDuration, KeepAliveInterval: streamKeepAlive,
+		},
 		MaxResponseBytes: orDefault(raw.MaxResponseBytes, DefaultMaxResponseBytes),
 	}
 	if raw.CatalogURL != nil {

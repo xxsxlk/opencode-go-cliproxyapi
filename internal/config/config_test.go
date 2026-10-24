@@ -55,6 +55,12 @@ func TestLoadMinimalAppliesAllDefaults(t *testing.T) {
 	if c.MaxResponseBytes != 67108864 {
 		t.Errorf("MaxResponseBytes = %d", c.MaxResponseBytes)
 	}
+	if c.Streaming.HeaderTimeout != DefaultStreamHeaderTimeout ||
+		c.Streaming.IdleTimeout != DefaultStreamIdleTimeout ||
+		c.Streaming.KeepAliveInterval != DefaultStreamKeepAliveInterval ||
+		c.Streaming.MaxDuration != 0 {
+		t.Errorf("Streaming = %+v", c.Streaming)
+	}
 }
 
 func TestLoadFullConfigHonorsEveryField(t *testing.T) {
@@ -83,6 +89,11 @@ route-overrides:
 allow-http: true
 request-timeout: 5m
 max-response-bytes: 1024
+streaming:
+  header-timeout: 10m
+  idle-timeout: 9m
+  max-duration: 2h
+  keepalive-interval: 3s
 `
 	c, err := Load([]byte(doc))
 	if err != nil {
@@ -118,6 +129,10 @@ max-response-bytes: 1024
 	}
 	if c.RequestTimeout != 5*time.Minute {
 		t.Errorf("RequestTimeout = %v", c.RequestTimeout)
+	}
+	if c.Streaming.HeaderTimeout != 10*time.Minute || c.Streaming.IdleTimeout != 9*time.Minute ||
+		c.Streaming.MaxDuration != 2*time.Hour || c.Streaming.KeepAliveInterval != 3*time.Second {
+		t.Errorf("Streaming = %+v", c.Streaming)
 	}
 	if c.MaxResponseBytes != 1024 {
 		t.Errorf("MaxResponseBytes = %d", c.MaxResponseBytes)
@@ -300,6 +315,25 @@ func TestLoadErrorsNeverLeakDecodedValues(t *testing.T) {
 		if strings.Contains(err.Error(), tc.secret) {
 			t.Fatalf("%s: error leaks secret %q: %v", tc.name, tc.secret, err)
 		}
+	}
+}
+
+func TestStreamingSettingsValidation(t *testing.T) {
+	for _, tt := range []struct{ field, value, want string }{
+		{"header-timeout", "0s", "streaming:"},
+		{"idle-timeout", "-1s", "streaming:"},
+		{"max-duration", "-1s", "streaming:"},
+		{"keepalive-interval", "-1s", "streaming:"},
+		{"idle-timeout", "bogus", "streaming.idle-timeout: invalid duration"},
+	} {
+		t.Run(tt.field+tt.value, func(t *testing.T) {
+			_, err := Load([]byte(withKey + "streaming:\n  " + tt.field + ": " + tt.value + "\n"))
+			requireErrContains(t, err, tt.want)
+		})
+	}
+	cfg, err := Load([]byte(withKey + "streaming:\n  max-duration: 0s\n  keepalive-interval: 0s\n"))
+	if err != nil || cfg.Streaming.MaxDuration != 0 || cfg.Streaming.KeepAliveInterval != 0 {
+		t.Fatalf("disabled optional streaming limits: %+v, %v", cfg.Streaming, err)
 	}
 }
 

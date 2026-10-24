@@ -27,7 +27,7 @@ const ProviderID = "opencode-go"
 // pluginName / pluginVersion are reported in registration metadata.
 const (
 	pluginName    = "opencode-go-cliproxyapi"
-	pluginVersion = "0.2.3"
+	pluginVersion = "0.2.4"
 )
 
 // githubRepoURL satisfies the host's validPlugin gate (host.go
@@ -53,6 +53,10 @@ type Manager struct {
 	mu  sync.RWMutex
 	cfg config.Config
 	mgr *catalog.Manager
+	// Streaming requests inherit this lifetime so shutdown cancels even an
+	// indefinitely active thinking stream before draining host callbacks.
+	streamCtx     context.Context
+	cancelStreams context.CancelFunc
 	// stop/done manage the one background refresh goroutine; both nil
 	// when no loop is running.
 	stop chan struct{}
@@ -61,7 +65,8 @@ type Manager struct {
 
 // NewManager returns a dispatcher whose outbound traffic flows through bridge.
 func NewManager(bridge *HostBridge) *Manager {
-	return &Manager{bridge: bridge}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Manager{bridge: bridge, streamCtx: ctx, cancelStreams: cancel}
 }
 
 // HandleCall dispatches one RPC method and returns envelope bytes. Handler
@@ -229,12 +234,17 @@ func pluginConfigFields() []pluginapi.ConfigField {
 		{
 			Name:        "request-timeout",
 			Type:        pluginapi.ConfigFieldTypeString,
-			Description: "Upstream HTTP request timeout (default: 5m).",
+			Description: "Non-streaming HTTP request timeout (default: 5m).",
+		},
+		{
+			Name:        "streaming",
+			Type:        pluginapi.ConfigFieldTypeObject,
+			Description: "Streaming limits (header-timeout, idle-timeout, max-duration, keepalive-interval).",
 		},
 		{
 			Name:        "max-response-bytes",
 			Type:        pluginapi.ConfigFieldTypeInteger,
-			Description: "Max non-streaming response body size in bytes (default: 67108864).",
+			Description: "Max upstream response bytes, including cumulative stream chunks (default: 67108864).",
 		},
 		{
 			Name:        "allow-http",
@@ -307,6 +317,9 @@ func (m *Manager) handleLifecycle(request []byte) ([]byte, error) {
 
 	m.mu.Lock()
 	m.cfg = cfg
+	if m.streamCtx == nil || m.streamCtx.Err() != nil {
+		m.streamCtx, m.cancelStreams = context.WithCancel(context.Background())
+	}
 	// FR-002 stale-while-unavailable: a failed refresh must neither wipe a
 	// non-empty previous snapshot nor keep the OLD manager, whose stored cfg
 	// would pin the old base-url/catalog-url/protocols/prefix so ticks
@@ -450,6 +463,20 @@ var shutdownDrainTimeout = 15 * time.Second
 func (m *Manager) handleShutdown() ([]byte, error) {
 	m.lifeMu.Lock()
 	defer m.lifeMu.Unlock()
+	// Cancel and nil the stream parent under the WRITE lock (F4 exception,
+	// deliberate): a request's Err()-check and its inFlight.Add must not
+	// straddle this point. RWMutex ordering makes one of two outcomes hold —
+	// the request's RLock (and Add) completes before we acquire the write
+	// lock, so WaitForInFlight counts it; or it runs after, sees nil, and
+	// backs off before touching the host. Previously check and Add were
+	// separated outside the lock, letting a shutdown finish Wait+dlclose in
+	// the gap while the request then called into freed host memory.
+	m.mu.Lock()
+	if m.cancelStreams != nil {
+		m.cancelStreams()
+	}
+	m.streamCtx, m.cancelStreams = nil, nil
+	m.mu.Unlock()
 	oldDone := m.closeStop()
 	if oldDone != nil {
 		<-oldDone

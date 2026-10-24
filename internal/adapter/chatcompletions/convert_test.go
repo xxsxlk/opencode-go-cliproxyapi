@@ -363,3 +363,43 @@ func TestConvertChatUsageDetails(t *testing.T) {
 		}
 	}
 }
+
+func TestConvertNonStreamReasoningContent(t *testing.T) {
+	body := `{"id":"r1","model":"glm-5.3-flash","choices":[{"finish_reason":"stop","message":{"role":"assistant","reasoning_content":"chain of thought","content":"hello"}}]}`
+
+	t.Run("claude", func(t *testing.T) {
+		m := mustConvert(t, "claude", body)
+		content := m["content"].([]any)
+		if len(content) != 2 {
+			t.Fatalf("want 2 content blocks, got %v", content)
+		}
+		b0 := content[0].(map[string]any)
+		if b0["type"] != "thinking" || b0["thinking"] != "chain of thought" {
+			t.Fatalf("thinking block = %v", b0)
+		}
+		b1 := content[1].(map[string]any)
+		if b1["type"] != "text" || b1["text"] != "hello" {
+			t.Fatalf("text block = %v", b1)
+		}
+	})
+
+	t.Run("openai-response", func(t *testing.T) {
+		m := mustConvert(t, "openai-response", body)
+		output := m["output"].([]any)
+		if len(output) != 2 {
+			t.Fatalf("want 2 output items, got %v", output)
+		}
+		rItem := output[0].(map[string]any)
+		if rItem["type"] != "reasoning" || rItem["id"] != "rs_r1" {
+			t.Fatalf("reasoning item = %v", rItem)
+		}
+		summary := rItem["summary"].([]any)
+		if len(summary) != 1 || summary[0].(map[string]any)["text"] != "chain of thought" {
+			t.Fatalf("summary = %v", summary)
+		}
+		mItem := output[1].(map[string]any)
+		if mItem["type"] != "message" || mItem["id"] != "r1" {
+			t.Fatalf("message item = %v", mItem)
+		}
+	})
+}

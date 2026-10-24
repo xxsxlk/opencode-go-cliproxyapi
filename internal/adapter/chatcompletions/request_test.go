@@ -1143,3 +1143,28 @@ func TestClaudeToolImagesRejectMalformedSource(t *testing.T) {
 		}
 	}
 }
+
+func TestReasoningEffortClampedToSupportedLevels(t *testing.T) {
+	glmLevels := &pluginapi.ThinkingSupport{Levels: []string{"low", "medium", "high"}}
+
+	t.Run("responses max clamps to high", func(t *testing.T) {
+		m := mustBuild(t, "openai-response", `{"reasoning":{"effort":"max"},"input":"hi"}`, glmLevels)
+		if m["reasoning_effort"] != "high" {
+			t.Fatalf("reasoning_effort = %v, want high", m["reasoning_effort"])
+		}
+	})
+
+	t.Run("responses xhigh clamps to high when model only supports low/medium/high", func(t *testing.T) {
+		m := mustBuild(t, "openai-response", `{"reasoning":{"effort":"xhigh"},"input":"hi"}`, glmLevels)
+		if m["reasoning_effort"] != "high" {
+			t.Fatalf("reasoning_effort = %v, want high", m["reasoning_effort"])
+		}
+	})
+
+	t.Run("openai max clamps to high", func(t *testing.T) {
+		m := mustBuild(t, "openai", `{"model":"glm-5.3-flash","reasoning_effort":"max","messages":[{"role":"user","content":"hi"}]}`, glmLevels)
+		if m["reasoning_effort"] != "high" {
+			t.Fatalf("reasoning_effort = %v, want high", m["reasoning_effort"])
+		}
+	})
+}

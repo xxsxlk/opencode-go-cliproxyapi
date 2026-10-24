@@ -14,9 +14,14 @@
 - **UTF-8 Safety**: Hardened string boundary slicing to prevent corrupting multi-byte UTF-8 runes in partial response chunks.
 - **Test Suite Optimization**: Resolved blocking catalog 15-second drain lag in integration tests, reducing test suite execution time significantly.
 
+- **Streaming Lifecycle & Thinking Resilience**:
+  - Dedicated `streaming` configuration (`header-timeout`, `idle-timeout`, `max-duration`, `keepalive-interval`) decoupling long-running thinking streams from non-streaming `request-timeout`.
+  - Cross-protocol `reasoning_content` synthesis for Chat Completions models (`glm-5.3-flash`, `deepseek-v4.1-flash`, `kimi-k2.5`) into Anthropic `thinking` blocks and OpenAI Responses `reasoning` summary events/items.
+  - Capability-aware `reasoning.effort` clamping (`ClampEffort`) so out-of-range canonical levels (such as `"max"`) map cleanly to the target model's supported set.
+
 ## Upgrade Notes
 
 - Replace the old plugin binary with the new release binary.
 - Restart CLIProxyAPI after replacing the plugin.
 
-**Full Changelog**: https://github.com/massiveits/opencode-go-cliproxyapi/compare/v0.2.2...v0.2.3
+**Full Changelog**: https://github.com/massiveits/opencode-go-cliproxyapi/compare/v0.2.3...v0.2.4

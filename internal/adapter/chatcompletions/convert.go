@@ -11,8 +11,9 @@ import (
 // ---- upstream Chat Completions response shapes (FR-006) ----
 
 type ccRespMessage struct {
-	Content   json.RawMessage     `json:"content"` // JSON string or part array
-	ToolCalls []shared.CCToolCall `json:"tool_calls"`
+	Content          json.RawMessage     `json:"content"` // JSON string or part array
+	ReasoningContent string              `json:"reasoning_content"`
+	ToolCalls        []shared.CCToolCall `json:"tool_calls"`
 }
 
 type ccChoice struct {
@@ -96,10 +97,17 @@ func chatToClaude(body []byte) ([]byte, *errclass.Error) {
 		return nil, eErr
 	}
 	choice := resp.Choices[0]
-	blocks, eErr := ccContentToBlocks(choice.Message.Content)
+	var blocks []claudeBlock
+	if choice.Message.ReasoningContent != "" {
+		blocks = append(blocks, claudeBlock{
+			"type": "thinking", "thinking": choice.Message.ReasoningContent,
+		})
+	}
+	contentBlocks, eErr := ccContentToBlocks(choice.Message.Content)
 	if eErr != nil {
 		return nil, eErr
 	}
+	blocks = append(blocks, contentBlocks...)
 	toolUse, eErr := claudeToolUseBlocks(choice.Message.ToolCalls)
 	if eErr != nil {
 		return nil, eErr
@@ -181,6 +189,9 @@ func chatToResponses(body []byte, tools ...*shared.ResponseTools) ([]byte, *errc
 	// slot): the message leads and appears only when text is non-empty,
 	// matching the streaming terminal (FR-006 sibling parity).
 	oa := shared.NewOutputAssembler(resp.ID, tools...)
+	if choice.Message.ReasoningContent != "" {
+		oa.AddReasoning(choice.Message.ReasoningContent)
+	}
 	for _, b := range blocks {
 		if b["type"] != "text" {
 			return nil, errclass.Translation(fmt.Sprintf(
