@@ -131,6 +131,7 @@ func cliproxyPluginFree(ptr unsafe.Pointer, _ C.size_t) {
 //export cliproxyPluginShutdown
 func cliproxyPluginShutdown() {
 	_, _ = dispatcher.HandleCall(pluginabi.MethodPluginShutdown, nil)
+	C.store_host_api(nil)
 }
 
 // callHost bridges internal/plugin's RawCaller into the stored C host API.
@@ -149,6 +150,9 @@ func callHost(method string, payload []byte) ([]byte, error) {
 		return nil, fmt.Errorf("host callback %s failed (rc=%d)", method, rc)
 	}
 	if resp.ptr == nil || resp.len == 0 {
+		if resp.ptr != nil {
+			C.free_host_buffer(resp.ptr, resp.len)
+		}
 		return nil, fmt.Errorf("host callback %s returned empty buffer", method)
 	}
 	if resp.len > maxRequestLen {

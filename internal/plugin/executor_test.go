@@ -1801,3 +1801,32 @@ func TestExecutorResponsesToolsRoundTripStream(t *testing.T) {
 		t.Fatalf("stream wire name leaked downstream:\n%s", s)
 	}
 }
+
+func TestEnsureStreamFlagEnforced(t *testing.T) {
+	// Inbound body without "stream": true
+	noStreamReq := `{"model":"x","messages":[{"role":"user","content":"hi"}]}`
+	m, f := newStreamManager(t, streamScript{
+		upstreamID: "up-nostream",
+		frames: []string{
+			`data: {"id":"r1","model":"glm-5.3","choices":[{"index":0,"delta":{"content":"ok"}}]}` + "\n\n",
+			"data: [DONE]\n\n",
+		},
+	})
+	resp, err := m.HandleCall("executor.execute_stream",
+		execStreamReqBody("opencode-go/glm-5.3", "openai", []byte(noStreamReq), "down-nostream"))
+	if err != nil {
+		t.Fatalf("execute_stream: %v", err)
+	}
+	if env := decodeEnv(t, resp); !env.OK {
+		t.Fatalf("execute_stream envelope = %+v", env.Error)
+	}
+	calls := f.callsOf(pluginabi.MethodHostHTTPDoStream)
+	if len(calls) == 0 {
+		t.Fatal("expected DoStream call")
+	}
+	streamWire := decodePayload(t, calls[0])
+	body := string(wireBody(t, streamWire, "body"))
+	if !strings.Contains(body, `"stream":true`) {
+		t.Fatalf("upstream payload must enforce stream:true, got:\n%s", body)
+	}
+}

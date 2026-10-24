@@ -80,6 +80,8 @@ func (m *Manager) HandleCall(method string, request []byte) (resp []byte, err er
 	switch method {
 	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
 		return m.handleLifecycle(request)
+	case pluginabi.MethodPluginQuiesce:
+		return okEnvelope(struct{}{}), nil
 	case pluginabi.MethodModelStatic, pluginabi.MethodModelForAuth:
 		return m.handleModels()
 	case pluginabi.MethodPluginShutdown:
@@ -349,17 +351,17 @@ func (m *Manager) materializeAuthRecords(ctx context.Context, cfg config.Config)
 		// when a credential has a readable filename.
 		if (entry.Provider == ProviderID || entry.Type == ProviderID) && !strings.HasPrefix(entry.ID, "opencode-go-key-") {
 			if !filepath.IsAbs(entry.Path) {
-				return fmt.Errorf("existing auth record has no absolute path")
+				continue
 			}
 			raw, err := os.ReadFile(entry.Path)
 			if err != nil {
-				return fmt.Errorf("cannot read existing plugin auth record")
+				continue
 			}
 			var record struct {
 				APIKey string `json:"api_key"`
 			}
 			if json.Unmarshal(raw, &record) != nil || record.APIKey == "" {
-				return fmt.Errorf("existing plugin auth record is invalid")
+				continue
 			}
 			digest := sha256.Sum256([]byte(record.APIKey))
 			existing["opencode-go-key-"+hex.EncodeToString(digest[:])] = struct{}{}
@@ -418,11 +420,14 @@ func (m *Manager) handleModels() ([]byte, error) {
 		for _, rec := range mgr.Models() {
 			models = append(models, pluginapi.ModelInfo{
 				ID:                        rec.PublicID,
+				Name:                      rec.UpstreamID,
 				Object:                    "model",
 				OwnedBy:                   ProviderID,
 				DisplayName:               rec.DisplayName,
 				ContextLength:             rec.ContextLimit,
+				InputTokenLimit:           rec.ContextLimit,
 				MaxCompletionTokens:       rec.OutputLimit,
+				OutputTokenLimit:          rec.OutputLimit,
 				SupportedInputModalities:  rec.InputModes,
 				SupportedOutputModalities: rec.OutputModes,
 				Thinking:                  rec.Thinking,

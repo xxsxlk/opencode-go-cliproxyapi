@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strings"
+	"unicode/utf8"
 
 	"opencode-go-cliproxyapi/internal/errclass"
 )
@@ -93,13 +94,22 @@ func UnwrapCustomToolInput(args string) string {
 }
 
 // qualifiedToolName flattens one namespaced child to its wire name. Names
-// longer than 64 characters truncate to 50 chars plus "__" plus the first
-// 6 bytes of the SHA-256 digest hex-encoded (50+2+12 = 64).
+// longer than 64 characters truncate safely along UTF-8 rune boundaries to
+// at most 50 bytes plus "__" plus the first 6 bytes of the SHA-256 digest hex-encoded (<=64).
 func qualifiedToolName(name, namespace string) string {
 	qualified := namespace + "__" + name
 	if len(qualified) > 64 {
 		sum := sha256.Sum256([]byte(qualified))
-		qualified = qualified[:50] + "__" + hex.EncodeToString(sum[:6])
+		suffix := "__" + hex.EncodeToString(sum[:6])
+		maxPrefixLen := 64 - len(suffix) // 50 bytes
+		prefixBytes := []byte(qualified)
+		if len(prefixBytes) > maxPrefixLen {
+			prefixBytes = prefixBytes[:maxPrefixLen]
+			for len(prefixBytes) > 0 && !utf8.Valid(prefixBytes) {
+				prefixBytes = prefixBytes[:len(prefixBytes)-1]
+			}
+		}
+		qualified = string(prefixBytes) + suffix
 	}
 	return qualified
 }

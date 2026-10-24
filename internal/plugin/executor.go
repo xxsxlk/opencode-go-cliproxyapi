@@ -321,10 +321,11 @@ type streamConverter interface {
 }
 
 // Compile-time proof the close-without-terminal Flush seam (F5) picks up
-// both converters that can hold a deferred terminal.
+// all converters that can hold a deferred terminal.
 var (
 	_ interface{ Flush() [][]byte } = (*chatcompletions.StreamConverter)(nil)
 	_ interface{ Flush() [][]byte } = (*messages.StreamConverter)(nil)
+	_ interface{ Flush() [][]byte } = (*responses.StreamConverter)(nil)
 )
 
 func newStreamConverter(route catalog.Route, sourceFormat string, tools ...*shared.ResponseTools) streamConverter {
@@ -369,6 +370,7 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 	if eErr != nil {
 		return classEnvelope(eErr), nil
 	}
+	upstreamBody = ensureStreamFlag(upstreamBody)
 
 	url := catalog.JoinUpstreamURL(res.cfg.BaseURL, res.rec.EndpointPath)
 	debugTrace("executor sending stream url=%s body_len=%d", url, len(upstreamBody))
@@ -497,4 +499,26 @@ func (m *Manager) emitAll(downStreamID string, events [][]byte) error {
 		}
 	}
 	return nil
+}
+
+// ensureStreamFlag ensures the outbound JSON request explicitly carries "stream": true
+// so upstream endpoints always respond with streaming text/event-stream payloads
+// even if the inbound original request omitted the flag.
+func ensureStreamFlag(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(body, &obj) != nil || obj == nil {
+		return body
+	}
+	if raw, ok := obj["stream"]; ok && string(raw) == "true" {
+		return body
+	}
+	obj["stream"] = json.RawMessage("true")
+	b, err := json.Marshal(obj)
+	if err != nil {
+		return body
+	}
+	return b
 }

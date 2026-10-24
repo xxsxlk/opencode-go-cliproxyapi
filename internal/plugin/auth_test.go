@@ -111,3 +111,16 @@ func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 func bytesContain(haystack, needle []byte) bool {
 	return strings.Contains(string(haystack), string(needle))
 }
+
+func TestAuthProviderParseStandardKeyWithoutRedundantType(t *testing.T) {
+	p := authProvider{}
+	// When host routes explicitly to ProviderID, accept records with valid api_key even if type/provider fields are absent
+	parsed, err := p.ParseAuth(context.Background(), pluginapi.AuthParseRequest{
+		Provider: ProviderID,
+		FileName: "generic.json",
+		RawJSON:  []byte(`{"api_key":"sk-generic-key","label":"My Key"}`),
+	})
+	if err != nil || !parsed.Handled || parsed.Auth.Attributes["api_key"] != "sk-generic-key" {
+		t.Fatalf("expected handled generic auth, got %#v, err=%v", parsed, err)
+	}
+}

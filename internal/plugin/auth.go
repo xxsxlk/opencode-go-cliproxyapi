@@ -31,7 +31,10 @@ func (p authProvider) ParseAuth(_ context.Context, req pluginapi.AuthParseReques
 		}
 		return pluginapi.AuthParseResponse{}, nil
 	}
-	if (req.Provider != "" && req.Provider != ProviderID) || (raw.Type != ProviderID && raw.Provider != ProviderID) {
+	if req.Provider != "" && req.Provider != ProviderID {
+		return pluginapi.AuthParseResponse{Handled: false}, nil
+	}
+	if req.Provider == "" && raw.Type != ProviderID && raw.Provider != ProviderID {
 		return pluginapi.AuthParseResponse{Handled: false}, nil
 	}
 	if strings.TrimSpace(raw.APIKey) == "" {

@@ -463,7 +463,7 @@ func TestRegisterSuccessPublishesModels(t *testing.T) {
 		t.Fatalf("static = %+v", static)
 	}
 	got := static.Models[0]
-	if got.ID != "opencode-go/glm-5.3" || got.Object != "model" || got.OwnedBy != ProviderID ||
+	if got.ID != "opencode-go/glm-5.3" || got.Name != "glm-5.3" || got.Object != "model" || got.OwnedBy != ProviderID ||
 		got.DisplayName != "glm-5.3" || got.ContextLength != 0 || got.MaxCompletionTokens != 0 ||
 		len(got.SupportedInputModalities) != 0 || len(got.SupportedOutputModalities) != 0 {
 		t.Fatalf("model info = %+v", got)
@@ -789,7 +789,9 @@ func TestRegisterRefreshesWithConfiguredBearer(t *testing.T) {
 // registration must still succeed with an empty routable set (FR-002).
 func TestRegisterWithBlockingCatalogReturnsQuickly(t *testing.T) {
 	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
+	var closeOnce sync.Once
+	drain := func() { closeOnce.Do(func() { close(release) }) }
+	t.Cleanup(drain)
 	f := &fakeCaller{responder: func(method string, payload []byte) ([]byte, error) {
 		var wire map[string]any
 		if method == pluginabi.MethodHostHTTPDo && json.Unmarshal(payload, &wire) == nil {
@@ -801,7 +803,10 @@ func TestRegisterWithBlockingCatalogReturnsQuickly(t *testing.T) {
 		return hostOK(map[string]any{}), nil
 	}}
 	m := NewManager(NewHostBridge(f.call))
-	t.Cleanup(func() { _, _ = m.HandleCall("plugin.shutdown", nil) })
+	t.Cleanup(func() {
+		drain()
+		_, _ = m.HandleCall("plugin.shutdown", nil)
+	})
 
 	start := time.Now()
 	resp, err := m.HandleCall("plugin.register", lifecycleRequestBody(testValidYAML))
@@ -1283,4 +1288,16 @@ func mustHandle(t *testing.T, m *Manager, method string, req []byte) []byte {
 		t.Fatalf("%s: %v", method, err)
 	}
 	return resp
+}
+
+func TestPluginQuiesce(t *testing.T) {
+	m, _ := newTestManager(nil)
+	resp, err := m.HandleCall(pluginabi.MethodPluginQuiesce, nil)
+	if err != nil {
+		t.Fatalf("quiesce error: %v", err)
+	}
+	env := decodeEnv(t, resp)
+	if !env.OK {
+		t.Fatalf("quiesce envelope not ok: %+v", env.Error)
+	}
 }

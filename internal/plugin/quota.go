@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -45,6 +46,20 @@ func (m *Manager) FetchQuota(ctx context.Context, req pluginapi.QuotaFetchReques
 	return normalizeQuota(resp.Body)
 }
 
+func parseResetTime(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339, raw)
+	}
+	if err != nil {
+		return "", fmt.Errorf("quota reset time invalid")
+	}
+	return parsed.UTC().Format(time.RFC3339Nano), nil
+}
+
 func normalizeQuota(body []byte) (pluginapi.QuotaFetchResponse, error) {
 	var decoded struct {
 		Usage map[string]quotaUpstreamWindow `json:"usage"`
@@ -53,22 +68,42 @@ func normalizeQuota(body []byte) (pluginapi.QuotaFetchResponse, error) {
 		return pluginapi.QuotaFetchResponse{}, fmt.Errorf("quota response invalid")
 	}
 	buckets := []pluginapi.QuotaBucket{}
+	seen := make(map[string]bool)
 	for _, name := range []string{"rolling", "weekly", "monthly"} {
 		window, exists := decoded.Usage[name]
 		if !exists || window.Percent == nil {
+			continue
+		}
+		seen[name] = true
+		percent := *window.Percent
+		if math.IsNaN(percent) || math.IsInf(percent, 0) || percent < 0 || percent > 100 {
+			return pluginapi.QuotaFetchResponse{}, fmt.Errorf("quota percentage invalid")
+		}
+		reset, err := parseResetTime(window.ResetsAt)
+		if err != nil {
+			return pluginapi.QuotaFetchResponse{}, err
+		}
+		buckets = append(buckets, pluginapi.QuotaBucket{Window: name, RemainingFraction: 1 - percent/100, ResetTime: reset})
+	}
+	var extraNames []string
+	for k := range decoded.Usage {
+		if !seen[k] {
+			extraNames = append(extraNames, k)
+		}
+	}
+	slices.Sort(extraNames)
+	for _, name := range extraNames {
+		window := decoded.Usage[name]
+		if window.Percent == nil {
 			continue
 		}
 		percent := *window.Percent
 		if math.IsNaN(percent) || math.IsInf(percent, 0) || percent < 0 || percent > 100 {
 			return pluginapi.QuotaFetchResponse{}, fmt.Errorf("quota percentage invalid")
 		}
-		reset := ""
-		if window.ResetsAt != "" {
-			parsed, err := time.Parse(time.RFC3339Nano, window.ResetsAt)
-			if err != nil {
-				return pluginapi.QuotaFetchResponse{}, fmt.Errorf("quota reset time invalid")
-			}
-			reset = parsed.UTC().Format(time.RFC3339Nano)
+		reset, err := parseResetTime(window.ResetsAt)
+		if err != nil {
+			return pluginapi.QuotaFetchResponse{}, err
 		}
 		buckets = append(buckets, pluginapi.QuotaBucket{Window: name, RemainingFraction: 1 - percent/100, ResetTime: reset})
 	}

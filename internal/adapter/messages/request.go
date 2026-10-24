@@ -215,7 +215,7 @@ func foldSystem(req map[string]json.RawMessage, folded []string) *errclass.Error
 	blocks = append(blocks, b)
 	merged, err := json.Marshal(blocks)
 	if err != nil {
-		return errclass.Translation("model id cannot be represented as JSON")
+		return errclass.Translation("system blocks cannot be represented as JSON")
 	}
 	req["system"] = merged
 	return nil

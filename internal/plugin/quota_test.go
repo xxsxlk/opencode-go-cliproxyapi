@@ -126,3 +126,14 @@ func TestReadableAuthFilenameAtColdStartDoesNotDuplicate(t *testing.T) {
 		t.Fatal("modified host metadata")
 	}
 }
+
+func TestQuotaDynamicAndExtendedWindows(t *testing.T) {
+	body := []byte(`{"usage":{"daily":{"percent":25.5,"resetsAt":"2026-10-24T00:00:00Z"},"custom_tier":{"percent":10}}}`)
+	res, err := normalizeQuota(body)
+	if err != nil {
+		t.Fatalf("normalizeQuota failed on extended windows: %v", err)
+	}
+	if len(res.Groups) == 0 || len(res.Groups[0].Buckets) != 2 {
+		t.Fatalf("expected 2 buckets, got %+v", res.Groups)
+	}
+}

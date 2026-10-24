@@ -1317,3 +1317,71 @@ func TestClaudeCallIDAndItemIDAreOneBlock(t *testing.T) {
 		t.Errorf("arg delta = %v", d)
 	}
 }
+
+func TestResponsesStreamFlush(t *testing.T) {
+	t.Run("claude stream flush on abrupt close", func(t *testing.T) {
+		sc := NewStreamConverter("claude")
+		raw := frame("response.created", createdPayload) +
+			frame("response.output_text.delta", `{"delta":"hello"}`)
+		evs, done, err := sc.Feed([]byte(raw))
+		if err != nil || done {
+			t.Fatalf("unexpected err=%v done=%v", err, done)
+		}
+		if len(evs) == 0 {
+			t.Fatal("expected initial events")
+		}
+
+		flushed := sc.Flush()
+		if len(flushed) == 0 {
+			t.Fatal("expected flushed events on abrupt close")
+		}
+		// Second flush must return nil (one-shot)
+		if again := sc.Flush(); len(again) != 0 {
+			t.Fatalf("subsequent flush must return nil, got %v", again)
+		}
+
+		// Verify flushed contains message_stop
+		hasStop := false
+		for _, b := range flushed {
+			m := payloadOf(t, b)
+			if m["type"] == "message_stop" {
+				hasStop = true
+				break
+			}
+		}
+		if !hasStop {
+			t.Fatalf("flushed events must contain message_stop, got: %s", flushed)
+		}
+	})
+
+	t.Run("openai stream flush on abrupt close", func(t *testing.T) {
+		sc := NewStreamConverter("openai")
+		raw := frame("response.created", createdPayload) +
+			frame("response.output_text.delta", `{"delta":"hello"}`)
+		_, done, err := sc.Feed([]byte(raw))
+		if err != nil || done {
+			t.Fatalf("unexpected err=%v done=%v", err, done)
+		}
+
+		flushed := sc.Flush()
+		if len(flushed) == 0 {
+			t.Fatal("expected flushed events for openai target")
+		}
+		if again := sc.Flush(); len(again) != 0 {
+			t.Fatalf("subsequent flush must return nil, got %v", again)
+		}
+	})
+
+	t.Run("flush after normal completion is no-op", func(t *testing.T) {
+		sc := NewStreamConverter("claude")
+		raw := frame("response.created", createdPayload) +
+			frame("response.completed", `{}`)
+		_, done, err := sc.Feed([]byte(raw))
+		if err != nil || !done {
+			t.Fatalf("unexpected err=%v done=%v", err, done)
+		}
+		if flushed := sc.Flush(); len(flushed) != 0 {
+			t.Fatalf("flush after completed must return nil, got %v", flushed)
+		}
+	})
+}

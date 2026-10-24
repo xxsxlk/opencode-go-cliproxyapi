@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func reqWithInput(t *testing.T, input any, tools []RespTool, toolChoice any) *ResponsesRequest {
@@ -480,5 +481,20 @@ func TestNormalizeNamespaceCustomChildUnrolled(t *testing.T) {
 	}
 	if r.Tools[0].Name != "subagents__custom_sub" {
 		t.Fatalf("name = %q want %q", r.Tools[0].Name, "subagents__custom_sub")
+	}
+}
+
+func TestQualifiedToolNameUTF8Boundary(t *testing.T) {
+	// Construct a multi-byte Chinese tool name that exceeds 64 bytes
+	ns := "命名空间测试" // 6 runes, 18 bytes
+	// 50 bytes cutoff should not slice in the middle of a 3-byte Chinese rune
+	longName := "超长工具名称用于测试边界截断逻辑是否会破坏中文字符编码完整性"
+	got := qualifiedToolName(longName, ns)
+
+	if len(got) > 64 {
+		t.Fatalf("qualified tool name length = %d > 64", len(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("qualified tool name is not valid UTF-8: %q", got)
 	}
 }

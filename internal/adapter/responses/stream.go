@@ -45,6 +45,9 @@ type StreamConverter struct {
 	// conversion targets; an instance converts to exactly one target,
 	// so nextIndex doubles as the tool block index allocator.
 	tracker *toolCallTracker
+
+	terminalSent bool
+	flushed      bool
 }
 
 // NewStreamConverter builds a converter for sourceFormat ("openai",
@@ -589,6 +592,7 @@ func (sc *StreamConverter) argsFragment(itemID, delta string) ([][]byte, bool, *
 // message_stop. Shared precedence: tool calls outrank the status-derived
 // reason, so response.incomplete cannot downgrade them.
 func (sc *StreamConverter) terminal(incomplete bool, in, out int, details shared.UsageDetails) ([][]byte, bool, *errclass.Error) {
+	sc.terminalSent = true
 	st := "completed"
 	if incomplete {
 		st = "incomplete"
@@ -685,4 +689,26 @@ func failureError(ev *failureEvent) *errclass.Error {
 		return errclass.FromStatus(status, msg)
 	}
 	return errclass.UpstreamFallback(msg)
+}
+
+// Flush synthesizes a terminal event when the upstream stream closed
+// without response.completed or response.incomplete (FR-006 parity with
+// Chat Completions and Messages stream converters). It emits finish chunks
+// for openai targets and close-before-stop / message_stop for claude targets;
+// openai-response passthrough forwards verbatim and holds nothing back.
+// One-shot: later calls return nothing, as does any call when terminal was
+// already sent.
+func (sc *StreamConverter) Flush() [][]byte {
+	if sc.flushed {
+		return nil
+	}
+	sc.flushed = true
+	if sc.terminalSent {
+		return nil
+	}
+	if sc.source == "openai-response" {
+		return nil
+	}
+	events, _, _ := sc.terminal(true, 0, 0, shared.UsageDetails{})
+	return events
 }
