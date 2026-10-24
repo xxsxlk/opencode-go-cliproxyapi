@@ -1,0 +1,16 @@
+# Compiled binaries and libraries
+plugins/
+dist/
+*.so
+*.dylib
+*.dll
+*.h
+
+# Test and coverage artifacts
+*.test
+*.out
+coverage.html
+
+# Operating System files
+.DS_Store
+Thumbs.db
