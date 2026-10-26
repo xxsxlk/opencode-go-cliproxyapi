@@ -546,12 +546,20 @@ func fromResponses(upstreamModel string, body []byte, ts *pluginapi.ThinkingSupp
 				"type": "tool_use", "id": item.CallID, "name": item.Name, "input": input,
 			})
 		case "function_call_output", "custom_tool_call_output":
-			text, eErr := shared.RespOutputText(item.Output, "tool messages carry text only")
+			blocks, eErr := shared.ClaudeBlocksFromOpenAI(item.Output, EndpointPath)
 			if eErr != nil {
 				return nil, eErr
 			}
+			var content any
+			if len(blocks) == 1 && blocks[0]["type"] == "text" {
+				content = blocks[0]["text"]
+			} else if len(blocks) > 0 {
+				content = blocks
+			} else {
+				content = ""
+			}
 			b.add("user:tool", "user", anthropicBlock{
-				"type": "tool_result", "tool_use_id": item.CallID, "content": text,
+				"type": "tool_result", "tool_use_id": item.CallID, "content": content,
 			})
 		case "reasoning":
 			// Best-effort: keep summary text as a thinking block;

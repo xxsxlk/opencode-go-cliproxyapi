@@ -493,6 +493,47 @@ func TestFromResponsesRequest_FunctionCallOutputArray(t *testing.T) {
 	}
 }
 
+func TestResponsesFunctionCallOutputWithImages(t *testing.T) {
+	body := `{
+		"model":"opencode-go/claude-3-7-sonnet",
+		"input":[
+			{"type":"function_call","call_id":"c1","name":"read","arguments":"{}"},
+			{"type":"function_call_output","call_id":"c1","output":[
+				{"type":"input_text","text":"file contents"},
+				{"type":"input_image","image_url":"https://example.com/pic.png"}
+			]}
+		]
+	}`
+	m, eErr := respReq(t, body)
+	if eErr != nil {
+		t.Fatalf("unexpected error: %v", eErr)
+	}
+	msgs := m["messages"].([]any)
+	if len(msgs) != 2 {
+		t.Fatalf("messages = %d: %v", len(msgs), msgs)
+	}
+	out := msgs[1].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if out["type"] != "tool_result" || out["tool_use_id"] != "c1" {
+		t.Errorf("function_call_output block = %v", out)
+	}
+	blocks := out["content"].([]any)
+	if len(blocks) != 2 {
+		t.Fatalf("want 2 blocks in tool_result, got %d: %v", len(blocks), blocks)
+	}
+	textBlk := blocks[0].(map[string]any)
+	if textBlk["type"] != "text" || textBlk["text"] != "file contents" {
+		t.Errorf("text block wrong: %v", textBlk)
+	}
+	imgBlk := blocks[1].(map[string]any)
+	if imgBlk["type"] != "image" {
+		t.Errorf("image block wrong: %v", imgBlk)
+	}
+	src := imgBlk["source"].(map[string]any)
+	if src["type"] != "url" || src["url"] != "https://example.com/pic.png" {
+		t.Errorf("image source wrong: %v", src)
+	}
+}
+
 func TestResponsesReasoningOmittedWhenEmptySummary(t *testing.T) {
 	m, eErr := respReq(t, `{"input":[{"type":"reasoning","summary":[]}]}`)
 	if eErr != nil {

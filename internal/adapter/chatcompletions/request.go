@@ -394,9 +394,21 @@ func responsesToChat(upstreamModel string, body []byte, ts *pluginapi.ThinkingSu
 		return nil, eErr
 	}
 	applyToolChoiceCC(out, kind, tcName)
+	var toolImageParts []ccContentPart
+	flushToolImages := func() {
+		if len(toolImageParts) > 0 {
+			out.Messages = append(out.Messages, ccMessage{
+				Role:    "user",
+				Content: toolImageParts,
+			})
+			toolImageParts = nil
+		}
+	}
+
 	for _, item := range items {
 		switch item.Type {
 		case "message":
+			flushToolImages()
 			content, eErr := respContent(item.Content)
 			if eErr != nil {
 				return nil, eErr
@@ -427,6 +439,7 @@ func responsesToChat(upstreamModel string, body []byte, ts *pluginapi.ThinkingSu
 				return nil, shared.ValidateRole(item.Role, EndpointPath)
 			}
 		case "function_call", "custom_tool_call":
+			flushToolImages()
 			args := item.Arguments
 			if args == "" && item.Input != "" {
 				args = item.Input
@@ -447,19 +460,48 @@ func responsesToChat(upstreamModel string, body []byte, ts *pluginapi.ThinkingSu
 				Role: "assistant", ToolCalls: []shared.CCToolCall{tc},
 			})
 		case "function_call_output", "custom_tool_call_output":
-			text, eErr := shared.RespOutputText(item.Output, "tool messages carry text only")
+			parts, eErr := shared.RespOutputParts(item.Output)
 			if eErr != nil {
 				return nil, eErr
 			}
+			var text strings.Builder
+			hasImage := false
+			for _, part := range parts {
+				if part.ImageURL != "" {
+					hasImage = true
+				} else {
+					text.WriteString(part.Text)
+				}
+			}
+			toolText := text.String()
+			if hasImage {
+				toolText += "\n[Images from this tool result are in the following user message, labeled with tool_call_id " + item.CallID + ".]"
+				toolImageParts = append(toolImageParts, ccContentPart{
+					Type: "text",
+					Text: "Tool result images for tool_call_id " + item.CallID + ":",
+				})
+				for _, part := range parts {
+					if part.ImageURL != "" {
+						toolImageParts = append(toolImageParts, ccContentPart{
+							Type:     "image_url",
+							ImageURL: &imageURLField{URL: part.ImageURL},
+						})
+					}
+				}
+			}
 			out.Messages = append(out.Messages, ccMessage{
-				Role: "tool", Content: text, ToolCallID: item.CallID,
+				Role:       "tool",
+				Content:    toolText,
+				ToolCallID: item.CallID,
 			})
 		case "reasoning":
 			// omitted: no Chat Completions equivalent (FR-005 policy)
 		default:
+			flushToolImages()
 			return nil, shared.UnsupportedInputItemType(item.Type)
 		}
 	}
+	flushToolImages()
 
 	for _, t := range src.Tools {
 		if eErr := shared.FunctionTool(t.Type, EndpointPath); eErr != nil {

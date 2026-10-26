@@ -516,6 +516,33 @@ func TestRespOutputText(t *testing.T) {
 	}
 }
 
+func TestRespOutputParts(t *testing.T) {
+	for _, raw := range []json.RawMessage{nil, json.RawMessage(`null`)} {
+		parts, eErr := RespOutputParts(raw)
+		if eErr != nil || len(parts) != 0 {
+			t.Errorf("absent content error = %v, len = %d", eErr, len(parts))
+		}
+	}
+	parts, eErr := RespOutputParts(json.RawMessage(`"plain text"`))
+	if eErr != nil || len(parts) != 1 || parts[0].Text != "plain text" {
+		t.Errorf("string content = %v, %v", parts, eErr)
+	}
+	parts, eErr = RespOutputParts(json.RawMessage(`[
+		{"type":"input_text","text":"txt"},
+		{"type":"input_image","image_url":"https://example.com/pic.png"},
+		{"type":"image_url","image_url":{"url":"data:image/png;base64,QUJD"}}
+	]`))
+	if eErr != nil {
+		t.Fatalf("unexpected error: %v", eErr)
+	}
+	if len(parts) != 3 {
+		t.Fatalf("want 3 parts, got %d: %v", len(parts), parts)
+	}
+	if parts[0].Text != "txt" || parts[1].ImageURL != "https://example.com/pic.png" || parts[2].ImageURL != "data:image/png;base64,QUJD" {
+		t.Errorf("parts content wrong: %v", parts)
+	}
+}
+
 func TestStopFinishRoundTrip(t *testing.T) {
 	for _, stop := range []string{"tool_use", "max_tokens", "refusal"} {
 		if back := FinishToClaudeStop(ClaudeStopToFinish(stop)); back != stop {

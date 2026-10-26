@@ -594,6 +594,77 @@ func TestFromResponsesRequest_FunctionCallOutputArray(t *testing.T) {
 	}
 }
 
+func TestFromResponsesRequest_FunctionCallOutputWithImages(t *testing.T) {
+	body := `{
+		"model":"opencode-go/glm-5.2",
+		"input":[
+			{"type":"function_call","call_id":"c1","name":"read","arguments":"{}"},
+			{"type":"function_call_output","call_id":"c1","output":[
+				{"type":"input_text","text":"Read image file"},
+				{"type":"input_image","detail":"auto","image_url":"data:image/webp;base64,QUJD"}
+			]}
+		]
+	}`
+	m := mustBuild(t, "openai-response", body, nil)
+	msgs := m["messages"].([]any)
+	if len(msgs) != 3 {
+		t.Fatalf("want 3 messages (tool, user), got %d: %v", len(msgs), msgs)
+	}
+	toolMsg := msgs[1].(map[string]any)
+	if toolMsg["role"] != "tool" || toolMsg["tool_call_id"] != "c1" {
+		t.Fatalf("tool message wrong: %v", toolMsg)
+	}
+	contentStr := toolMsg["content"].(string)
+	if !strings.Contains(contentStr, "Read image file") || !strings.Contains(contentStr, "tool_call_id c1") {
+		t.Fatalf("tool message content wrong: %s", contentStr)
+	}
+	userMsg := msgs[2].(map[string]any)
+	if userMsg["role"] != "user" {
+		t.Fatalf("want user role for tool images, got: %v", userMsg)
+	}
+	parts := userMsg["content"].([]any)
+	if len(parts) != 2 {
+		t.Fatalf("want 2 parts (label + image), got %d: %v", len(parts), parts)
+	}
+	imgPart := parts[1].(map[string]any)
+	if imgPart["type"] != "image_url" {
+		t.Fatalf("want image_url part, got: %v", imgPart)
+	}
+	imgURL := imgPart["image_url"].(map[string]any)["url"]
+	if imgURL != "data:image/webp;base64,QUJD" {
+		t.Fatalf("want data URL, got: %v", imgURL)
+	}
+}
+
+func TestFromResponsesRequest_ParallelFunctionCallOutputWithImages(t *testing.T) {
+	body := `{
+		"model":"opencode-go/glm-5.2",
+		"input":[
+			{"type":"function_call","call_id":"c1","name":"read","arguments":"{}"},
+			{"type":"function_call","call_id":"c2","name":"read","arguments":"{}"},
+			{"type":"function_call_output","call_id":"c1","output":[
+				{"type":"input_text","text":"file 1"},
+				{"type":"input_image","image_url":"https://example.com/1.png"}
+			]},
+			{"type":"function_call_output","call_id":"c2","output":[
+				{"type":"input_text","text":"file 2"},
+				{"type":"input_image","image_url":"https://example.com/2.png"}
+			]}
+		]
+	}`
+	m := mustBuild(t, "openai-response", body, nil)
+	msgs := m["messages"].([]any)
+	if len(msgs) != 4 {
+		t.Fatalf("want 4 messages (assistant, tool, tool, user), got %d: %v", len(msgs), msgs)
+	}
+	if msgs[1].(map[string]any)["role"] != "tool" || msgs[2].(map[string]any)["role"] != "tool" {
+		t.Fatalf("tool messages must precede user images: %v", msgs)
+	}
+	if msgs[3].(map[string]any)["role"] != "user" {
+		t.Fatalf("want user message at end, got: %v", msgs[3])
+	}
+}
+
 func TestBuildRequestResponsesVariants(t *testing.T) {
 	t.Run("empty string input yields no messages", func(t *testing.T) {
 		m := mustBuild(t, "openai-response", `{"input":""}`, nil)

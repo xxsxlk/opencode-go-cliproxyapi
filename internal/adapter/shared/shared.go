@@ -532,6 +532,47 @@ func RespOutputText(raw json.RawMessage, targetNoun string) (string, *errclass.E
 	return b.String(), nil
 }
 
+// RespOutputParts parses Responses function_call_output output content (JSON
+// string or content part array) into a slice of ContentPart, preserving both
+// text parts and images (input_image / image_url).
+func RespOutputParts(raw json.RawMessage) ([]ContentPart, *errclass.Error) {
+	if !HasContent(raw) {
+		return nil, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if s == "" {
+			return nil, nil
+		}
+		return []ContentPart{{Text: s}}, nil
+	}
+	var parts []struct {
+		Type     string          `json:"type"`
+		Text     string          `json:"text"`
+		ImageURL json.RawMessage `json:"image_url"`
+	}
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return nil, errclass.Translation("tool output must be a string or an array of content parts")
+	}
+	var out []ContentPart
+	for _, p := range parts {
+		if !IsContentPartType(p.Type) {
+			return nil, ValidateContentPart(p.Type, "tool output")
+		}
+		if p.Type == "image_url" || p.Type == "input_image" {
+			url, eErr := OpenAIImageURL(p.ImageURL)
+			if eErr != nil {
+				return nil, eErr
+			}
+			out = append(out, ContentPart{ImageURL: url})
+			continue
+		}
+		if p.Text != "" {
+			out = append(out, ContentPart{Text: p.Text})
+		}
+	}
+	return out, nil
+}
 
 // ClaudeImageURL converts an Anthropic image block source into an image
 // URL for OpenAI-style targets, encoding base64 sources as data URLs

@@ -18,6 +18,7 @@
   - Dedicated `streaming` configuration (`header-timeout`, `idle-timeout`, `max-duration`, `keepalive-interval`) decoupling long-running thinking streams from non-streaming `request-timeout`.
   - Cross-protocol `reasoning_content` synthesis for Chat Completions models (`glm-5.3-flash`, `deepseek-v4.1-flash`, `kimi-k2.5`) into Anthropic `thinking` blocks and OpenAI Responses `reasoning` summary events/items.
   - Capability-aware `reasoning.effort` clamping (`ClampEffort`) so out-of-range canonical levels (such as `"max"`) map cleanly to the target model's supported set.
+- **Responses Tool Image Support**: Allow `function_call_output` to carry multimodal images (`input_image` / `image_url`) when translating from OpenAI Responses to Chat Completions and Anthropic Messages, resolving HTTP 400 errors during tool image inspections in agents like OMP.
 
 ## Upgrade Notes
 
