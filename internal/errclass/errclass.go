@@ -39,13 +39,13 @@ func (e *Error) Error() string {
 
 // FromStatus classifies an upstream HTTP status per resolved §7.
 // Network/timeout failures (no status) use FromNetwork instead. A redacted
-// message containing "quota" (case-insensitive) upgrades 429/402/403 to
-// ClassQuota — a bounded heuristic given no documented upstream quota
-// taxonomy.
+// message matching upstream quota/usage-limit taxonomies (e.g. "quota",
+// "usage limit", "usage_limit", "credit", "balance") upgrades 429/402/403 to
+// ClassQuota.
 func FromStatus(status int, message string) *Error {
 	msg := Redact(message)
 	lowerMsg := strings.ToLower(msg)
-	quota := strings.Contains(lowerMsg, "quota")
+	quota := isQuotaMessage(lowerMsg)
 	quotaClass := func(base Class) Class {
 		if quota {
 			return ClassQuota
@@ -68,6 +68,23 @@ func FromStatus(status int, message string) *Error {
 		return &Error{Class: ClassUpstream, Message: msg, StatusCode: status, Retryable: true}
 	}
 	return &Error{Class: ClassUnsupported, Message: msg, StatusCode: status}
+}
+
+// isQuotaMessage checks whether the lower-cased error message matches known
+// quota, usage limit, allowance, or credit exhaustion patterns.
+func isQuotaMessage(lowerMsg string) bool {
+	return strings.Contains(lowerMsg, "quota") ||
+		strings.Contains(lowerMsg, "usage limit") ||
+		strings.Contains(lowerMsg, "usage_limit") ||
+		strings.Contains(lowerMsg, "usagelimit") ||
+		strings.Contains(lowerMsg, "out of credit") ||
+		strings.Contains(lowerMsg, "insufficient credit") ||
+		strings.Contains(lowerMsg, "insufficient balance") ||
+		strings.Contains(lowerMsg, "balance") ||
+		strings.Contains(lowerMsg, "budget") ||
+		strings.Contains(lowerMsg, "额度") ||
+		strings.Contains(lowerMsg, "用量") ||
+		strings.Contains(lowerMsg, "余额不足")
 }
 
 // FromNetwork classifies a PRE-first-byte network/timeout failure; always
