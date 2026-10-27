@@ -27,7 +27,7 @@ const ProviderID = "opencode-go"
 // pluginName / pluginVersion are reported in registration metadata.
 const (
 	pluginName    = "opencode-go-cliproxyapi"
-	pluginVersion = "0.2.5"
+	pluginVersion = "0.3.0"
 )
 
 // githubRepoURL satisfies the host's validPlugin gate (host.go
@@ -53,6 +53,7 @@ type Manager struct {
 	mu  sync.RWMutex
 	cfg config.Config
 	mgr *catalog.Manager
+	breaker *CircuitBreaker
 	// Streaming requests inherit this lifetime so shutdown cancels even an
 	// indefinitely active thinking stream before draining host callbacks.
 	streamCtx     context.Context
@@ -66,7 +67,13 @@ type Manager struct {
 // NewManager returns a dispatcher whose outbound traffic flows through bridge.
 func NewManager(bridge *HostBridge) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{bridge: bridge, streamCtx: ctx, cancelStreams: cancel}
+	m := &Manager{bridge: bridge, streamCtx: ctx, cancelStreams: cancel}
+	m.breaker = NewCircuitBreaker(bridge, func() string {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		return m.cfg.BaseURL
+	})
+	return m
 }
 
 // HandleCall dispatches one RPC method and returns envelope bytes. Handler

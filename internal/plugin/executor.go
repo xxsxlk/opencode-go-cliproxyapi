@@ -90,6 +90,11 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 	if res == nil {
 		return failEnv, nil
 	}
+	if m.breaker != nil {
+		if bErr := m.breaker.Check(context.Background(), res.key); bErr != nil {
+			return classEnvelope(bErr), nil
+		}
+	}
 	sessionID, eErr := resolveOpenCodeSessionID(req)
 	if eErr != nil {
 		return classEnvelope(eErr), nil
@@ -117,7 +122,11 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 	}
 	debugTrace("executor received non-stream status=%d body_len=%d", resp.StatusCode, len(resp.Body))
 	if resp.StatusCode >= 400 {
-		return classEnvelope(shared.UpstreamStatusError(resp.StatusCode, resp.Body)), nil
+		e := shared.UpstreamStatusError(resp.StatusCode, resp.Body)
+		if e.Class == errclass.ClassQuota && m.breaker != nil {
+			m.breaker.Trip(res.key, e.Message, resp.Body)
+		}
+		return classEnvelope(e), nil
 	}
 	// Parse/envelope guard only; true OOM prevention belongs to the host transport's byte cap.
 	if int64(len(resp.Body)) > res.cfg.MaxResponseBytes {

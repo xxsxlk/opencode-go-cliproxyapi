@@ -211,6 +211,11 @@ func awaitStreamOpen(opened <-chan streamOpenResult, grace <-chan time.Time) (st
 // A delayed start can be canceled without leaving its host-registered stream
 // behind: HostBridge.DoStream closes late arrivals after its timeout.
 func (m *Manager) openStream(ctx context.Context, res *resolvedExecution, sessionID string, body []byte) streamOpenResult {
+	if m.breaker != nil && res != nil {
+		if bErr := m.breaker.Check(ctx, res.key); bErr != nil {
+			return streamOpenResult{failure: bErr}
+		}
+	}
 	headerCtx, cancel := context.WithTimeout(ctx, res.cfg.Streaming.HeaderTimeout)
 	defer cancel()
 	status, _, id, err := m.bridge.DoStream(headerCtx, pluginapi.HTTPRequest{
@@ -240,15 +245,19 @@ func (m *Manager) openStream(ctx context.Context, res *resolvedExecution, sessio
 // after the caller has selected the pre-emission or post-emission path, so a
 // slow error body cannot change a retryable HTTP failure into a 200 SSE stream.
 func (m *Manager) streamStatusError(ctx context.Context, res *resolvedExecution, result streamOpenResult) *errclass.Error {
-	if result.id == "" {
-		return shared.UpstreamStatusError(result.status, nil)
+	var body []byte
+	if result.id != "" {
+		defer m.bridge.CloseStreamBounded(result.id)
+		budget := min(res.cfg.RequestTimeout, 2*time.Second)
+		readCtx, cancel := context.WithTimeout(ctx, budget)
+		defer cancel()
+		body, _, _, _ = m.bridge.StreamReadContext(readCtx, result.id)
 	}
-	defer m.bridge.CloseStreamBounded(result.id)
-	budget := min(res.cfg.RequestTimeout, 2*time.Second)
-	readCtx, cancel := context.WithTimeout(ctx, budget)
-	defer cancel()
-	body, _, _, _ := m.bridge.StreamReadContext(readCtx, result.id)
-	return shared.UpstreamStatusError(result.status, body)
+	e := shared.UpstreamStatusError(result.status, body)
+	if e.Class == errclass.ClassQuota && m.breaker != nil && res != nil {
+		m.breaker.Trip(res.key, e.Message, body)
+	}
+	return e
 }
 
 // waitForStream commits heartbeats only when the header phase is slow. It

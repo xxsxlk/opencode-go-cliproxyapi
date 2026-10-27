@@ -1,3 +1,16 @@
+## v0.3.0
+
+### Key Features & Resilience
+
+- **API Key In-Memory Circuit Breaker**: Introduced local in-memory circuit breaking per API key upon upstream quota exhaustion (429 / `ClassQuota`). Cross-model and streaming requests using the same exhausted API key are instantly short-circuited in memory, completely eliminating upstream penetration (0 network I/O).
+- **Dual-Channel Adaptive Recovery**:
+  1. **Reset Time Auto-Unlock**: When the upstream reset time arrives, the circuit breaker automatically closes and restores normal traffic without manual intervention.
+  2. **Adaptive Tiered Quota Probing (Remaining-Distance Based)**:
+     - **Tier 1 (remaining <= 30m)**: Aligns directly to `resetTime + 5s` for instant boundary recovery without unnecessary waiting.
+     - **Tier 2 (30m < remaining <= 6h)**: Probes every 30 minutes to maintain high sensitivity for manual top-ups or tier upgrades.
+     - **Tier 3 (remaining > 6h)**: Smoothly transitions to 1-hour intervals, minimizing redundant probe traffic during multi-day waits while still guaranteeing auto-recovery within an hour of any mid-term refill.
+  3. **Single-Flight Probe Guard**: Concurrent requests during active probing are short-circuited locally, preventing redundant network storms.
+
 ## v0.2.5
 
 ### Bug Fixes & Enhancements
