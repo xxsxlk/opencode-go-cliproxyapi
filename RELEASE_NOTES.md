@@ -1,4 +1,12 @@
-## What's Changed
+## v0.2.5
+
+### Bug Fixes & Enhancements
+
+- **Quota & Error Classification**: Aligned upstream HTTP 429 quota classification with OpenCode-Go usage limit taxonomy and CLIProxyAPI SDK specifications. Error messages matching `"Go usage limit exceeded"`, `"usage_limit_reached"`, `"usagelimit"`, `"balance"`, and `"budget"` are now accurately classified as `ClassQuota` (`quota_exhaustion`).
+
+## v0.2.4
+
+### What's Changed
 
 ### Bug Fixes & Enhancements
 
